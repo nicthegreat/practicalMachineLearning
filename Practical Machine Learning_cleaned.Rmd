@@ -1,0 +1,181 @@
+---
+title: "Practical Machine Learning Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+#### Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants as they perform barbell lifts correctly and incorrectly 5 different ways.
+
+Six young healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions:
+* Class A - exactly according to the specification
+* Class B - throwing the elbows to the front
+* Class C - lifting the dumbbell only halfway
+* Class D - lowering the dumbbell only halfway
+* Class E - throwing the hips to the front
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. Researchers made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+#### Data Source
+The training data for this project are available at:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available at:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+#### Goal of Project
+The goal of this project is to predict the manner in which subjects did the exercise. This is the "classe" variable in the training set. The model will use the other variables to predict with. This report describes:
+* how the model is built
+* use of cross validation
+* an estimate of expected out of sample error
+
+## Getting and Cleaning Data
+
+#### Loading Libraries and Set Seed
+First, we need to install packages, load libraries and set the seed to ensure reproduceability.
+
+```{r library}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+
+set.seed(123)
+```
+
+#### Load Data sets and Preliminary Inspection
+Next, we need to load the train and test data sets and conduct preliminary inspection of the data sets.
+
+```{r dataload}
+trainingset <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+testingset <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""))
+
+dim(trainingset)
+dim(testingset)
+
+str(trainingset)
+```
+
+#### Feature Reduction
+Next, we need identify what features we will be selecting for the model.  We can drop all the features with NAs, as well as the unique identifiers (row number, user name), timestamp and window descriptions in the first 7 columns which will not help the classification model.
+
+```{r cleanNulls}
+trainingset_clean <- trainingset[,colSums(is.na(trainingset)) == 0]
+testingset_clean <- testingset[,colSums(is.na(testingset)) == 0]
+```
+
+```{r dropfirstsevencolumns}
+trainingset_clean  <- trainingset_clean[,-c(1:7)]
+testingset_clean <- testingset_clean[,-c(1:7)]
+```
+
+Perform additional checks on clean data sets
+```{r checks}
+setdiff(names(testingset_clean),names(trainingset_clean)) ## problem_id
+setdiff(names(trainingset_clean),names(testingset_clean)) ##classe
+table(nearZeroVar(trainingset_clean, saveMetrics = TRUE)$zeroVar) ## all False
+```
+
+#### Data Partitioning
+For model cross-validation, we need to partition the training set further into another validation data set, resulting in 3 data sets: training data set, validation data set, and test data set.  We shall randomly take 25% of observations for the validation data set from the training data set.
+
+```{r dataPart}
+validationPart <- createDataPartition(y=trainingset_clean$classe, p=0.75, list=FALSE)
+trainingset_clean_updated <- trainingset_clean[validationPart, ] 
+validationset_clean <- trainingset_clean[-validationPart, ]
+```
+
+The dimensions of the three cleaned data sets to be modelled are as follows:
+```{r summary1}
+paste0('The number of observations in the training data set to be modelled is ', nrow(trainingset_clean_updated), ' observations.')
+paste0('The number of features in the training data set to be modelled is ', ncol(trainingset_clean_updated), ' features.')
+paste0('The number of observations in the validation data set to be modelled is ', nrow(validationset_clean), ' observations.')
+paste0('The number of features in the validation data set to be modelled is ', ncol(validationset_clean), ' features.')
+paste0('The number of observations in the test data set to be modelled is ', nrow(testingset_clean), ' observations.')
+paste0('The number of features in the test data set to be modelled is ', ncol(testingset_clean), ' features.')
+```
+
+We can inspect the proportion of each Classe against the entire data set.  This is so that we know whether one or two classes are imbalanced relative to the others.  Moreover, we can check the ratio of validation vs training proportions to see if our randomized split resulted in equally weighted data sets.
+
+```{r summary2}
+paste0('The proportion of observations from training data set for Classe A: ', 
+       round(sum(trainingset_clean_updated$classe == 'A')/nrow(trainingset_clean_updated),3), '. Classe B: ',
+       round(sum(trainingset_clean_updated$classe == 'B')/nrow(trainingset_clean_updated),3), '. Classe C: ',
+       round(sum(trainingset_clean_updated$classe == 'C')/nrow(trainingset_clean_updated),3), '. Classe D: ',
+       round(sum(trainingset_clean_updated$classe == 'D')/nrow(trainingset_clean_updated),3), '. Classe E: ',
+       round(sum(trainingset_clean_updated$classe == 'E')/nrow(trainingset_clean_updated),3), '.')
+paste0('The proportion of observations from validation data set for Classe A: ', 
+       round(sum(validationset_clean$classe == 'A')/nrow(validationset_clean),3), '. Classe B: ',
+       round(sum(validationset_clean$classe == 'B')/nrow(validationset_clean),3), '. Classe C: ',
+       round(sum(validationset_clean$classe == 'C')/nrow(validationset_clean),3), '. Classe D: ',
+       round(sum(validationset_clean$classe == 'D')/nrow(validationset_clean),3), '. Classe E: ',
+       round(sum(validationset_clean$classe == 'E')/nrow(validationset_clean),3), '.')
+```
+
+## Model Development and Performance Evaluation
+
+#### Decision Tree
+Our first prediction model will be using a Decision Tree algorithm (R-partition model).  We train it on the function rpart(), and then run the predict() function against the validation data set.
+
+```{r rPart}
+model_rpart <- rpart(classe~., data=trainingset_clean_updated, method = "class")
+prediction_rpart <- predict(model_rpart, validationset_clean, type = "class")
+
+```
+
+We look at the confusion matrix of the validation data set to determine the performance of the r-partitioning model.
+```{r rPartconfusion}
+confusionMatrix_rpart <- confusionMatrix(prediction_rpart, validationset_clean$classe)
+confusionMatrix_rpart 
+```
+
+```{r rpartAccuracy}
+paste0('The R-part model has an overall Accuracy of ', round(confusionMatrix_rpart$overall['Accuracy'],3),'.')
+```
+
+We can also see the major nodes and decision split points as defined by the r-partition model.
+```{r rParttree}
+rpart.plot(model_rpart, main="Classification Tree", extra=102, under=TRUE, faclen=0)
+```
+
+#### Random Forest
+Our second prediction model will be using a Random Forest algorithm.  We train it on the function randomForest(), and then run the predict() function against the validation data set.
+
+```{r randomForest}
+model_rf <- randomForest(classe~., data=trainingset_clean_updated, method = "class")
+prediction_rf <- predict(model_rf, validationset_clean, type = "class")
+
+```
+
+We look at the confusion matrix of the validation data set to determine the performance of the random forest model.
+```{r rfconfusion}
+confusionMatrix_rf <- confusionMatrix(prediction_rf, validationset_clean$classe)
+confusionMatrix_rf 
+```
+
+```{r rfAccuracy}
+paste0('The Random Forest model has an overall Accuracy of ', round(confusionMatrix_rf$overall['Accuracy'],3),'.')
+```
+
+## Conclusion and Test Data application
+
+On the training set, Random Forest algorithm performed much better than Decision Trees with a much higher Accuracy, Sensitivity and Recall against all classes, but in particular Class B and D.  The expected out-of-sample error is estimated at 0.005, or 0.5%. It is calculated as 1 - accuracy for predictions made against the cross-validation set. We can apply the same assumptions to the predictions on our testing data set which comprises just 20 observations.
+
+```{r testData}
+test_prediction <- predict(model_rf, testingset_clean, type = "class")
+test_prediction
+
+```
+
+As such, the above is our prediction for the classes of each of the 20 different test cases.
+
+## References
+
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+[2] Krzysztof Gra??bczewski and Norbert Jankowski. Feature Selection with Decision Tree Criterion.
